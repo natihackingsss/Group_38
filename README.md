@@ -49,6 +49,7 @@ README.md
 ```bash
 git clone https://github.com/natihackingsss/Group_38
 cd Group_38
+pip install -r requirements.txt
 python src/main.py
 ```
 ### 📑 Usage
