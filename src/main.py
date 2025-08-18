@@ -7,7 +7,7 @@ Description:
     and account security, and generates detailed audit reports in HTML/PDF format.
 
 Authors:
-    Group 38 (Contributors: [add names here])
+    Group 38 (Contributors: [We will add names later])
 
 Version:
     1.0.0
@@ -43,3 +43,4 @@ def App():
 
 if __name__ == "__main__":
 	App()
+
