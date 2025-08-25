@@ -1,0 +1,457 @@
+"""
+🛡️ Windows Hygiene Auditor (Group 38)
+Tabs:
+  1) Windows Security Auditor
+  2) Password Strength Checker (advanced)
+  3) Basic Web Server Auditor
+"""
+
+import os
+import math
+import time
+import socket
+import threading
+import platform
+import subprocess
+import http.client
+import re
+import customtkinter as ctk
+
+# ---------------------- Helpers ----------------------
+IS_WINDOWS = platform.system().lower() == "windows"
+COMMON_PORTS = [80, 443, 8080, 8000, 5000, 3000, 8888, 8443]
+
+def now():
+    return time.strftime("%H:%M:%S")
+
+def run_cmd(cmd, timeout=8):
+    """Run a command and return (code, stdout, stderr)."""
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return res.returncode, res.stdout.strip(), res.stderr.strip()
+    except Exception as e:
+        return -1, "", str(e)
+
+# ---------------------- Password strength ----------------------
+COMMON_WORDS = {
+    "password","123456","123456789","qwerty","abc123","letmein","admin","iloveyou",
+    "welcome","monkey","dragon","football","baseball","zaq12wsx","passw0rd","qwertyuiop"
+}
+KEYBOARD_ROWS = [
+    "1234567890-=", "qwertyuiop[]\\", "asdfghjkl;'", "zxcvbnm,./"
+]
+def is_keyboard_sequence(s, min_len=4):
+    s = s.lower()
+    # forward/backward on each row
+    for row in KEYBOARD_ROWS:
+        for i in range(len(row)-min_len+1):
+            seq = row[i:i+min_len]
+            if seq in s:
+                return True
+            if seq[::-1] in s:
+                return True
+    return False
+
+def repeated_sequences(s):
+    # detect "aaaa", "abcabc", etc.
+    if len(s) < 4:
+        return False
+    if re.search(r"(.)\1\1\1", s):  # 4 same chars
+        return True
+    # repeated chunks (e.g., abcabc)
+    for size in range(1, len(s)//2 + 1):
+        chunk = s[:size]
+        if chunk * (len(s)//size) == s[: size * (len(s)//size)] and len(s) % size == 0:
+            return True
+    return False
+
+def charset_size(pw):
+    size = 0
+    if any(c.islower() for c in pw): size += 26
+    if any(c.isupper() for c in pw): size += 26
+    if any(c.isdigit() for c in pw): size += 10
+    if any(not c.isalnum() for c in pw): size += 33  # rough ASCII symbols count
+    return max(size, 1)
+
+def entropy_bits(pw):
+    # Shannon-ish estimate via character set size
+    return len(pw) * math.log2(charset_size(pw))
+
+def crack_time_estimate(bits, guesses_per_sec=1e9):  # 1 billion guesses/s (fast attacker)
+    # Expected tries ~ 2^(bits-1); time = tries / rate
+    if bits <= 0: return 0.0
+    seconds = (2 ** (max(bits-1, 0))) / guesses_per_sec
+    return seconds
+
+def prettify_duration(seconds):
+    units = [("year", 365*24*3600), ("day", 24*3600), ("hour", 3600), ("min", 60), ("sec", 1)]
+    parts = []
+    for name, size in units:
+        if seconds >= size:
+            val = int(seconds // size)
+            seconds %= size
+            parts.append(f"{val} {name}{'' if val==1 else 's'}")
+        if len(parts) >= 2:
+            break
+    return " < 1 sec" if not parts else " ".join(parts)
+
+def evaluate_password(pw: str):
+    tips = []
+    # Basic checks
+    l = len(pw)
+    has_lower = any(c.islower() for c in pw)
+    has_upper = any(c.isupper() for c in pw)
+    has_digit = any(c.isdigit() for c in pw)
+    has_symbol = any(not c.isalnum() for c in pw)
+
+    score = 0
+
+    # length
+    if l >= 16: score += 35
+    elif l >= 12: score += 28
+    elif l >= 10: score += 22
+    elif l >= 8: score += 15
+    else: tips.append("Use at least 12 characters.")
+
+    # variety
+    classes = sum([has_lower, has_upper, has_digit, has_symbol])
+    score += [0, 5, 12, 18, 22][classes] if classes <= 4 else 22
+    if not has_lower: tips.append("Add lowercase letters.")
+    if not has_upper: tips.append("Add uppercase letters.")
+    if not has_digit: tips.append("Add digits.")
+    if not has_symbol: tips.append("Add symbols (e.g., !@#).")
+
+    # common words / obvious
+    low = pw.lower()
+    if any(w in low for w in COMMON_WORDS):
+        score -= 25
+        tips.append("Avoid common passwords/words or sequences.")
+
+    # keyboard sequence / repeats
+    if is_keyboard_sequence(pw):
+        score -= 15
+        tips.append("Avoid keyboard sequences like qwerty/1234.")
+    if repeated_sequences(pw):
+        score -= 10
+        tips.append("Avoid repeated patterns (e.g., abab, aaaa).")
+
+    # username/email patterns (very simple heuristic)
+    if re.search(r"\b(user|admin|name|email)\b", low):
+        score -= 8
+        tips.append("Don’t include personal identifiers like name/email.")
+
+    # clamp
+    score = max(0, min(100, score))
+
+    # verdict
+    if score >= 80: verdict = "Strong ✅"
+    elif score >= 55: verdict = "Medium ⚠️"
+    else: verdict = "Weak ❌"
+
+    bits = entropy_bits(pw)
+    tsec = crack_time_estimate(bits)
+    friendly = prettify_duration(tsec)
+
+    return {
+        "score": score,
+        "verdict": verdict,
+        "entropy_bits": round(bits, 1),
+        "time_to_crack": friendly,
+        "tips": tips
+    }
+
+# ---------------------- Web scanning ----------------------
+def scan_ports(host="127.0.0.1", ports=None, timeout=0.5):
+    result = {}
+    for p in ports or COMMON_PORTS:
+        try:
+            with socket.create_connection((host, p), timeout=timeout):
+                result[p] = True
+        except Exception:
+            result[p] = False
+    return result
+
+def probe_http(host, port, timeout=1.0):
+    try:
+        conn = http.client.HTTPConnection(host, port=port, timeout=timeout)
+        conn.request("GET", "/")
+        resp = conn.getresponse()
+        server = resp.getheader("Server", "")
+        status = f"{resp.status} {resp.reason}"
+        conn.close()
+        return True, status, server
+    except Exception:
+        return False, "", ""
+
+# ---------------------- UI ----------------------
+APP_W, APP_H = 820, 600
+
+def App():
+    ctk.set_appearance_mode("System")     # auto light/dark
+    ctk.set_default_color_theme("blue")   # pleasant default theme
+
+    app = ctk.CTk()
+    app.title("Windows Hygiene Auditor - Group 38")
+    app.geometry(f"{APP_W}x{APP_H}")
+
+    # Header
+    header = ctk.CTkLabel(app, text="🛡️ Windows Hygiene Auditor", font=("Arial", 20, "bold"))
+    header.pack(pady=(16, 8))
+
+    sub = ctk.CTkLabel(app, text="Clean, simple interface • Group 38", font=("Arial", 12))
+    sub.pack(pady=(0, 6))
+
+    # Tabs container
+    tabview = ctk.CTkTabview(app, width=760, height=480)
+    tabview.pack(padx=16, pady=10)
+
+    t1 = tabview.add("Windows Security Auditor")
+    t2 = tabview.add("Password Strength Checker")
+    t3 = tabview.add("Basic Web Server Auditor")
+
+    # Try to keep tab buttons even (~200 each for 3 tabs inside ~600)
+    try:
+        tabview._segmented_button.configure(width=600)
+        tabview._segmented_button._buttons_frame.grid_columnconfigure((0,1,2), weight=1, uniform="eq")
+    except Exception:
+        pass
+
+    # ------------------- Tab 1: Security -------------------
+    t1_frame = ctk.CTkFrame(t1)
+    t1_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+    t1_title = ctk.CTkLabel(t1_frame, text="System Security Checks", font=("Arial", 16, "bold"))
+    t1_title.pack(pady=(6, 2))
+
+    t1_hint = ctk.CTkLabel(t1_frame, text="Firewall, Defender, and Windows Update", font=("Arial", 12))
+    t1_hint.pack(pady=(0, 10))
+
+    btns = ctk.CTkFrame(t1_frame)
+    btns.pack(pady=6)
+
+    out1 = ctk.CTkTextbox(t1_frame, height=280)
+    out1.pack(fill="both", expand=True, padx=4, pady=8)
+
+    pb1 = ctk.CTkProgressBar(t1_frame)
+    pb1.pack(fill="x", padx=30, pady=(0, 8))
+    pb1.set(0)
+
+    def append1(line: str):
+        out1.insert("end", f"[{now()}] {line}\n")
+        out1.see("end")
+
+    def check_firewall():
+        if not IS_WINDOWS:
+            append1("🔸 Firewall: Non-Windows OS detected. Skipped.")
+            return
+        code, out, err = run_cmd(["netsh", "advfirewall", "show", "allprofiles"])
+        if code == 0:
+            on = len(re.findall(r"State\s+ON", out, flags=re.IGNORECASE))
+            off = len(re.findall(r"State\s+OFF", out, flags=re.IGNORECASE))
+            append1(f"🧱 Firewall: Profiles ON={on}, OFF={off}")
+        else:
+            append1(f"🧱 Firewall: Error ({code}) {err or out}")
+
+    def check_defender():
+        if not IS_WINDOWS:
+            append1("🔸 Defender: Non-Windows OS detected. Skipped.")
+            return
+        # Service status
+        code, out, err = run_cmd(["powershell", "-NoProfile", "-Command",
+                                  "(Get-Service -Name WinDefend).Status"])
+        if code == 0:
+            append1(f"🛡️ Defender service: {out.strip()}")
+        else:
+            append1(f"🛡️ Defender: Error ({code}) {err or out}")
+
+        # Real-time protection (may require Defender to be present/enabled)
+        code2, out2, err2 = run_cmd(["powershell", "-NoProfile", "-Command",
+                                     "Try { (Get-MpComputerStatus).RealTimeProtectionEnabled } Catch { 'N/A' }"])
+        if code2 == 0 and out2:
+            append1(f"🕒 Real-time protection: {out2.strip()}")
+        else:
+            append1("🕒 Real-time protection: N/A")
+
+    def check_updates():
+        if not IS_WINDOWS:
+            append1("🔸 Updates: Non-Windows OS detected. Skipped.")
+            return
+        # Windows Update service status
+        code, out, err = run_cmd(["powershell", "-NoProfile", "-Command",
+                                  "(Get-Service -Name wuauserv).Status"])
+        if code == 0:
+            append1(f"🔄 Windows Update service: {out.strip()}")
+        else:
+            append1(f"🔄 Windows Update: Error ({code}) {err or out}")
+
+        # Latest installed hotfix date (fast way)
+        cmd = ["powershell", "-NoProfile", "-Command",
+               "(Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 1).InstalledOn"]
+        code2, out2, err2 = run_cmd(cmd)
+        if code2 == 0 and out2:
+            append1(f"📦 Latest installed update: {out2.strip()}")
+        else:
+            append1("📦 Latest installed update: N/A")
+
+    def run_all_security():
+        pb1.set(0.0)
+        def task():
+            steps = [check_firewall, check_defender, check_updates]
+            for i, fn in enumerate(steps, 1):
+                try:
+                    fn()
+                except Exception as e:
+                    append1(f"❌ Error during step: {e}")
+                pb1.set(i/len(steps))
+                time.sleep(0.2)
+        threading.Thread(target=task, daemon=True).start()
+
+    b1 = ctk.CTkButton(btns, text="Check Firewall", command=lambda: threading.Thread(target=check_firewall, daemon=True).start())
+    b2 = ctk.CTkButton(btns, text="Check Defender", command=lambda: threading.Thread(target=check_defender, daemon=True).start())
+    b3 = ctk.CTkButton(btns, text="Check Updates",  command=lambda: threading.Thread(target=check_updates,  daemon=True).start())
+    b4 = ctk.CTkButton(t1_frame, text="▶ Run All", fg_color="#0ea5e9", hover_color="#0284c7",
+                       command=run_all_security)
+
+    b1.grid(row=0, column=0, padx=6, pady=6)
+    b2.grid(row=0, column=1, padx=6, pady=6)
+    b3.grid(row=0, column=2, padx=6, pady=6)
+    b4.pack(pady=(2, 6))
+
+    # ------------------- Tab 2: Password -------------------
+    t2_frame = ctk.CTkFrame(t2)
+    t2_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+    t2_title = ctk.CTkLabel(t2_frame, text="Advanced Password Strength Checker", font=("Arial", 16, "bold"))
+    t2_title.pack(pady=(6, 2))
+
+    t2_hint = ctk.CTkLabel(t2_frame, text="Instant score • Entropy • Estimated crack time • Actionable tips", font=("Arial", 12))
+    t2_hint.pack(pady=(0, 10))
+
+    entry_frame = ctk.CTkFrame(t2_frame)
+    entry_frame.pack(pady=6)
+
+    pw_entry = ctk.CTkEntry(entry_frame, placeholder_text="Type your password here", show="*", width=400)
+    pw_entry.grid(row=0, column=0, padx=(6, 6), pady=6)
+
+    show_var = ctk.StringVar(value="*")
+    def toggle_show():
+        show_var.set("" if show_var.get() == "*" else "*")
+        pw_entry.configure(show=show_var.get())
+    show_btn = ctk.CTkButton(entry_frame, text="Show/Hide", width=100, command=toggle_show)
+    show_btn.grid(row=0, column=1, padx=6, pady=6)
+
+    score_bar = ctk.CTkProgressBar(t2_frame)
+    score_bar.pack(fill="x", padx=24, pady=(6, 4))
+    score_bar.set(0)
+
+    verdict_lbl = ctk.CTkLabel(t2_frame, text="Score: 0  |  Verdict: –  |  Entropy: –  |  Crack time: –", font=("Arial", 12))
+    verdict_lbl.pack(pady=(0, 6))
+
+    tips_box = ctk.CTkTextbox(t2_frame, height=230)
+    tips_box.pack(fill="both", expand=True, padx=4, pady=6)
+
+    def render_result(data):
+        score = data["score"]
+        score_bar.set(score/100.0)
+        verdict_lbl.configure(text=f"Score: {score}  |  {data['verdict']}  |  Entropy: {data['entropy_bits']} bits  |  Crack time: {data['time_to_crack']}")
+        tips_box.delete("1.0", "end")
+        if data["tips"]:
+            tips_box.insert("end", "Suggestions:\n")
+            for t in data["tips"]:
+                tips_box.insert("end", f" • {t}\n")
+        else:
+            tips_box.insert("end", "Looks great! 🎉")
+
+    def evaluate_now(*_):
+        data = evaluate_password(pw_entry.get())
+        render_result(data)
+
+    eval_btn = ctk.CTkButton(t2_frame, text="Evaluate", command=evaluate_now)
+    eval_btn.pack(pady=(2, 8))
+
+    # Evaluate as you type (feels premium)
+    pw_entry.bind("<KeyRelease>", evaluate_now)
+
+    # ------------------- Tab 3: Web Auditor -------------------
+    t3_frame = ctk.CTkFrame(t3)
+    t3_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+    t3_title = ctk.CTkLabel(t3_frame, text="Basic Web Server Auditor", font=("Arial", 16, "bold"))
+    t3_title.pack(pady=(6, 2))
+
+    t3_hint = ctk.CTkLabel(t3_frame, text="Scan common ports and probe HTTP banner on open ports", font=("Arial", 12))
+    t3_hint.pack(pady=(0, 10))
+
+    controls = ctk.CTkFrame(t3_frame)
+    controls.pack(pady=6)
+
+    host_entry = ctk.CTkEntry(controls, placeholder_text="Target host (default: 127.0.0.1)", width=260)
+    host_entry.grid(row=0, column=0, padx=6, pady=6)
+
+    ports_entry = ctk.CTkEntry(controls, placeholder_text="Ports (comma separated) e.g. 80,443,8080", width=260)
+    ports_entry.grid(row=0, column=1, padx=6, pady=6)
+
+    results_box = ctk.CTkTextbox(t3_frame, height=280)
+    results_box.pack(fill="both", expand=True, padx=4, pady=8)
+
+    pb3 = ctk.CTkProgressBar(t3_frame)
+    pb3.pack(fill="x", padx=30, pady=(0, 8))
+    pb3.set(0)
+
+    def append3(line: str):
+        results_box.insert("end", f"[{now()}] {line}\n")
+        results_box.see("end")
+
+    def parse_ports(text):
+        if not text.strip():
+            return COMMON_PORTS
+        parts = re.split(r"[,\s]+", text.strip())
+        ports = []
+        for p in parts:
+            if p.isdigit():
+                val = int(p)
+                if 1 <= val <= 65535:
+                    ports.append(val)
+        return ports or COMMON_PORTS
+
+    def scan_task():
+        host = host_entry.get().strip() or "127.0.0.1"
+        ports = parse_ports(ports_entry.get())
+        append3(f"Scanning {host} on ports: {', '.join(map(str, ports))}")
+        res = {}
+        for i, p in enumerate(ports, 1):
+            open_ = False
+            status = ""
+            server = ""
+            try:
+                # port connectivity
+                with socket.create_connection((host, p), timeout=0.6):
+                    open_ = True
+            except Exception:
+                pass
+            if open_:
+                # try HTTP
+                ok, status, server = probe_http(host, p, timeout=1.2)
+                status = status or "Open (no HTTP response)"
+                server = server or "-"
+            res[p] = (open_, status, server)
+            pb3.set(i/len(ports))
+        append3("Scan results:")
+        for p in ports:
+            open_, status, server = res[p]
+            state = "OPEN ✅" if open_ else "closed ❌"
+            append3(f" • Port {p}: {state}  |  {status}  |  Server: {server}")
+        append3("Done.\n")
+
+    def run_scan():
+        pb3.set(0.0)
+        results_box.delete("1.0", "end")
+        threading.Thread(target=scan_task, daemon=True).start()
+
+    scan_btn = ctk.CTkButton(t3_frame, text="▶ Scan", command=run_scan)
+    scan_btn.pack(pady=(2, 6))
+
+    app.mainloop()
+
+if __name__ == "__main__":
+    App()
