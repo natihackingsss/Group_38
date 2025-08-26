@@ -6,6 +6,7 @@ Handles windows security scanner
 
 import wmi # We can use this to query system info
 import subprocess
+import sys
 
 class WindowsSecurity:
     def Enabled_AV(self):
@@ -61,3 +62,15 @@ class WindowsSecurity:
             return {"Pending updates" : updates}
         except Exception:
             return {"Pending updates" : None} # Failed to check
+
+    def Check_Windows_Version(self):
+        win_version = sys.getwindowsversion()
+        win_major, win_minor = win_version.major, win_version.minor
+
+        if win_major < 10:
+            # If the windows version is less than 10 it is automatically vulnerable
+            # This is because of the EternalBlue (MS17-010) vulnerablity found in windows version XP, 7, 8, 8.1
+            return f"{win_major}.{win_minor}", "Vulnerable"
+        else:
+            return f"{win_major}.{win_minor}", "Safe"
+        
