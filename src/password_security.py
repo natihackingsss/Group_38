@@ -3,6 +3,10 @@ Owner: ICBMAY
 
 Handles the functionality of the password strength checker.
 """
+
+import requests
+import hashlib
+
 def check_password_strength(password: str) -> dict:
     score = 0
     recommendations = []
@@ -51,6 +55,23 @@ def check_password_strength(password: str) -> dict:
         "recommendations": recommendations
     }
 
+def check_pwned(password: str) -> dict:
+    sha1_hash = hashlib.sha1(password.encode('utf-8')).hexdigest().upper()
+    prefix = sha1_hash[:5]
+    suffix = sha1_hash[5:]
+
+    url = f"https://api.pwnedpasswords.com/range/{prefix}"
+    api_response = requests.get(url)
+
+    if api_response.status_code != 200:
+        return {"error": "API request failed"}
+
+    hashes = (line.split(":") for line in api_response.text.splitlines())
+    for h, count in hashes:
+        if h == suffix:
+            return {"pwned": True, "count": int(count)}
+
+    return {"pwned": False, "count": 0}
 
 if name == "main":
     while True:
