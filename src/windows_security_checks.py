@@ -7,6 +7,7 @@ Handles windows security scanner
 import wmi # We can use this to query system info
 import subprocess
 import sys
+import json
 
 class WindowsSecurity:
     def Enabled_AV(self):
@@ -73,4 +74,34 @@ class WindowsSecurity:
             return f"{win_major}.{win_minor}", "Vulnerable"
         else:
             return f"{win_major}.{win_minor}", "Safe"
-        
+    
+    def Check_StartUp_Programs(self):
+        # We can use powershell to check this as well
+        result = {}
+        cmd = [
+            "powershell",
+            "-Command",
+            "Get-CimInstance Win32_StartupCommand | Select-Object Name, Command | ConvertTo-Json"
+        ]
+        startup_result = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            programs = json.loads(startup_result.stdout)
+        except json.JSONDecodeError:
+            return {"error" : "Unable to parse powershell output."}
+
+        # These are directorys/programs that are trusted by the program
+        safe = [
+            "Windows", "Program Files", "Program Files (x86)", "Microsoft", "system32", "ProgramData"
+        ]
+
+        if isinstance(programs, dict):
+            programs = [programs] # Converts the dictionary to a list
+
+        for prog in programs:
+            name = prog.get("Name", "").strip()
+            paths = prog.get("Command", "").strip()
+
+            is_safe = any(safe_prog in paths for safe_prog in safe) # Returns true if safe is in the path
+            result[name] = "Safe" if is_safe else "Suspicious"
+
+        return result
