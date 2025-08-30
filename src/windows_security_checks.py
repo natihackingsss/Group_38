@@ -95,7 +95,7 @@ class WindowsSecurity:
         ]
 
         if isinstance(programs, dict):
-            programs = [programs] # Converts the dictionary to a list
+            programs = [programs] # Adds all dictionaries to a list
 
         for prog in programs:
             name = prog.get("Name", "").strip()
@@ -105,3 +105,31 @@ class WindowsSecurity:
             result[name] = "Safe" if is_safe else "Suspicious"
 
         return result
+    
+    def Check_Network_Firewall(self):
+        result = {}
+
+        # We will also be using powershell for this
+        cmd = [
+            "powershell",
+            "-Command",
+            "Get-NetFirewallProfile | Select-Object Name, Enabled, DefaultInboundAction | ConvertTo-Json"
+        ]
+        status_result = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            status = json.loads(status_result.stdout)
+        except json.JSONDecodeError:
+            return 0
+
+        if isinstance(status, dict):
+            status = [status] # Converts the dictionary to a list
+
+        for stat in status:
+            name = stat.get("Name", "").strip()
+            state = stat.get("Enabled", 0)
+            inbound = stat.get("DefaultInboundAction", 0)
+
+            result[name] = ["Enabled" if state == 1 else "Disabled", inbound]
+            
+        return result
+    
