@@ -14,6 +14,8 @@ security risks related to exposed services.
 """
 
 import requests
+import socket
+import threading
 
 class WebVulnerabilityScan:
     def __init__(self, Target: str):
@@ -25,9 +27,50 @@ class WebVulnerabilityScan:
         """
         self.URL = Target
         self.web_ports = [80, 443]  # Standard web server ports
-        self.malicious_ports = [6666, 12345, 31337]  # Example of commonly misused ports
+        self.open_ports = []
+        self.safe_and_comman_ports = [
+            # Windows Networking ports
+            135, 137, 138, 139, 445, 3389, 5985, 5986,
 
-    def PortScanner(self, open_ports: list):
+            # Active Directory/Authentication
+            53, 88, 389, 636, 3268, 3269,
+
+            # File Transfer/Web
+            20, 21, 22, 23, 25, 80, 110, 143, 443, 465, 587, 993, 995,
+
+            # Databases/Services you might run on Windows
+            1433, 3306, 5432, 27017,
+
+            # Other Services
+            67, 68, 123, 5357
+        ]
+
+    def _scan(self, host, port):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.5)
+            sock.connect((host, port))
+            self.open_ports.append(port)
+            sock.close()
+        except:
+            pass
+
+    def PortScanner(self):
+        host = "127.0.0.1"
+        threads = []
+
+        for port in range(1, 9999):
+            # We can scan all ports quickly using threading 
+            handle_scan = threading.Thread(target=self._scan, args=(host, port))
+            threads.append(handle_scan)
+            handle_scan.start()
+
+        # Wait for all threads to finish
+        for t in threads:
+            t.join()
+        return self.open_ports
+
+    def PortAnalyzing(self, open_ports: list):
         """
         Analyze open ports obtained from the port scanning phase.
 
@@ -56,8 +99,8 @@ class WebVulnerabilityScan:
                     pass
 
             # --- Malicious port detection ---
-            if port in self.malicious_ports:
-                suspicious_ports.append(port)
+            if port not in self.safe_and_comman_ports:
+                suspicious_ports.append(port) # Appends the port if it is not in safe ports list
 
         return web_servers, suspicious_ports
 
@@ -65,10 +108,11 @@ class WebVulnerabilityScan:
 # Example standalone run (for demonstration purposes)
 if __name__ == "__main__":
     # ⚡ In real use: 'open_ports' should come from the port scanning component
-    open_ports = [22, 80, 443, 6666]
+    #open_ports = [22, 80, 443, 6666]
 
     scanner = WebVulnerabilityScan("127.0.0.1")
-    web_servers, suspicious_ports = scanner.PortScanner(open_ports)
+    opened = scanner.PortScanner()
+    web_servers, suspicious_ports = scanner.PortAnalyzing(opened)
 
     print("\n=== Web Vulnerability Scan Results ===")
     if web_servers:
@@ -83,6 +127,4 @@ if __name__ == "__main__":
         for port in suspicious_ports:
             print(f" - Port {port}")
     else:
-        print("\nNo malicious ports detected.")
-
-        
+       print("\nNo malicious ports detected.")
