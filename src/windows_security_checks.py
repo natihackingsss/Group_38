@@ -8,6 +8,7 @@ import wmi # We can use this to query system info
 import subprocess
 import sys
 import json
+import psutil
 
 class WindowsSecurity:
     def Enabled_AV(self):
@@ -133,3 +134,29 @@ class WindowsSecurity:
             
         return result
     
+    def Scan_Running_Processes(self):
+        # This function will scan all the processes that are running on the windows machine
+        results = set()
+
+        for proc in psutil.process_iter(attrs=['name']):
+            try:
+                name = proc.info['name']
+                
+                if name:
+                    results.add(name)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return results
+    def Scan_Disk_Usage(self):
+        hdd = psutil.disk_usage('/')
+
+        calculate_ratio = hdd.used / hdd.total * 100
+        if calculate_ratio > 90:
+            message = "Critical"
+
+        return {
+            "Total_GB": hdd.total / (2**30),
+            "Used_GB": hdd.used / (2**30),
+            "Free_GB": hdd.free / (2**30),
+            "Safety_Status": message if calculate_ratio > 90 else "Safe"
+        }
