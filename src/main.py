@@ -14,7 +14,7 @@ Version:
 
 Usage:
     Run the main entry point to launch the GUI:
-        python src/main.py
+        python app.py
 """
 
 import traceback
@@ -24,6 +24,7 @@ from tkinter import messagebox
 
 # Import our security checks
 from windows_security_checks import WindowsSecurity
+from web_server_scan import WebVulnerabilityAnalyzer
 
 
 def App():
@@ -101,7 +102,30 @@ def App():
     web_label = ctk.CTkLabel(web_frame, text="Scan for Running Web Servers", font=("Arial", 16))
     web_label.pack(pady=15)
 
-    web_btn = ctk.CTkButton(web_frame, text="Detect Web Servers", command=lambda: messagebox.showinfo("Web Servers", "Detection not yet implemented"))
+    web_result_box = ctk.CTkTextbox(web_frame, width=650, height=220)
+    web_result_box.pack(pady=10)
+
+    def run_web_scan_thread():
+        try:
+            analyzer = WebVulnerabilityAnalyzer("127.0.0.1")
+            # Example ports – replace with real scanner later
+            open_ports = [22, 80, 443, 6666]
+            analysis = analyzer.analyze_ports(open_ports)
+            report = analyzer.generate_json_report(analysis)
+
+            def update_ui():
+                web_result_box.delete("1.0", "end")
+                web_result_box.insert("1.0", report)
+
+            app.after(0, update_ui)
+
+        except Exception as e:
+            app.after(0, lambda: messagebox.showerror("Error", f"Web scan failed:\n{e}"))
+
+    def run_web_scan():
+        threading.Thread(target=run_web_scan_thread, daemon=True).start()
+
+    web_btn = ctk.CTkButton(web_frame, text="Detect Web Servers", command=run_web_scan)
     web_btn.pack(pady=10)
 
     # ===== Password Security Tab =====
