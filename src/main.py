@@ -1,22 +1,9 @@
 """
-🛡️ Windows Hygiene Auditor (Group 38)
-
-Description:
-    A Windows hygiene auditing tool with a graphical interface built using CustomTkinter.
-    The tool performs system hygiene checks, detects local web servers, evaluates password
-    and account security, and generates detailed audit reports in HTML/PDF format.
-
-Authors:
-    Group 38 (Contributors: [We will add name later])
-
-Version:
-    1.0.0
-
-Usage:
-    Run the main entry point to launch the GUI:
-        python app.py
+Windows Hygiene Auditor (Group 38)
+Main GUI Entrypoint
 """
 
+import sys
 import traceback
 import threading
 import customtkinter as ctk
@@ -24,7 +11,7 @@ from tkinter import messagebox
 
 # Import our security checks
 from windows_security_checks import WindowsSecurity
-from web_server_scan import WebVulnerabilityAnalyzer
+from password_security import check_password_strength, check_pwned
 
 
 def App():
@@ -102,30 +89,7 @@ def App():
     web_label = ctk.CTkLabel(web_frame, text="Scan for Running Web Servers", font=("Arial", 16))
     web_label.pack(pady=15)
 
-    web_result_box = ctk.CTkTextbox(web_frame, width=650, height=220)
-    web_result_box.pack(pady=10)
-
-    def run_web_scan_thread():
-        try:
-            analyzer = WebVulnerabilityAnalyzer("127.0.0.1")
-            # Example ports – replace with real scanner later
-            open_ports = [22, 80, 443, 6666]
-            analysis = analyzer.analyze_ports(open_ports)
-            report = analyzer.generate_json_report(analysis)
-
-            def update_ui():
-                web_result_box.delete("1.0", "end")
-                web_result_box.insert("1.0", report)
-
-            app.after(0, update_ui)
-
-        except Exception as e:
-            app.after(0, lambda: messagebox.showerror("Error", f"Web scan failed:\n{e}"))
-
-    def run_web_scan():
-        threading.Thread(target=run_web_scan_thread, daemon=True).start()
-
-    web_btn = ctk.CTkButton(web_frame, text="Detect Web Servers", command=run_web_scan)
+    web_btn = ctk.CTkButton(web_frame, text="Detect Web Servers", command=lambda: messagebox.showinfo("Web Servers", "Detection not yet implemented"))
     web_btn.pack(pady=10)
 
     # ===== Password Security Tab =====
@@ -133,7 +97,36 @@ def App():
     pass_label = ctk.CTkLabel(pass_frame, text="Evaluate Account Security", font=("Arial", 16))
     pass_label.pack(pady=15)
 
-    pass_btn = ctk.CTkButton(pass_frame, text="Run Password Audit", command=lambda: messagebox.showinfo("Password Audit", "Audit not yet implemented"))
+    password_entry = ctk.CTkEntry(pass_frame, width=300, placeholder_text="Enter your password")
+    password_entry.pack(pady=5)
+
+    pass_result_box = ctk.CTkTextbox(pass_frame, width=650, height=220)
+    pass_result_box.pack(pady=10)
+
+    def run_password_audit():
+        password = password_entry.get()
+        if not password:
+            messagebox.showerror("Error", "Please enter a password above first.")
+            return
+
+        try:
+            strength = check_password_strength(password)
+            pwned = check_pwned(password)
+
+            result = (
+                f"Password Strength: {strength['strength']} (Score: {strength['score']}/5)\n\n"
+                f"Recommendations: {', '.join(strength['recommendations']) if strength['recommendations'] else 'None'}\n\n"
+                f"Pwned Check: {'Yes' if pwned['pwned'] else 'No'}\n"
+                f"Breached Count: {pwned['count']}"
+            )
+
+            pass_result_box.delete("1.0", "end")
+            pass_result_box.insert("1.0", result)
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to check password:\n{e}")
+
+    pass_btn = ctk.CTkButton(pass_frame, text="Run Password Audit", command=run_password_audit)
     pass_btn.pack(pady=10)
 
     # ===== Reports Tab =====

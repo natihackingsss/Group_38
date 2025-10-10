@@ -73,7 +73,7 @@ def check_pwned(password: str) -> dict:
 
     return {"pwned": False, "count": 0}
 
-if name == "main":
+if __name__ == "main":
     while True:
         password = input("\nEnter your password: ")
         result = check_password_strength(password)
